@@ -1,128 +1,124 @@
+require("dotenv").config();
 const express = require("express");
 const app = express();
 const morgan = require("morgan");
-const cors = require('cors')
+const cors = require("cors");
+const Person = require("./models/person");
 
-app.use(cors())
+// MIDDLEWARE
+app.use(cors());
+app.use(express.static("build"));
 app.use(express.json());
-app.use(express.static('build'))
 
-// part 3.8 (including both versions)
 morgan.token("content-post", (req) => JSON.stringify(req.body));
 app.use(
   morgan(
     ":method :url :status :res[content-length] - :response-time ms :content-post"
   )
 );
-app.use(
-  morgan((tokens, req, res) => {
-    return [
-      tokens.method(req, res),
-      tokens.url(req, res),
-      tokens.status(req, res),
-      tokens.res(req, res, "content-length"),
-      "-",
-      tokens["response-time"](req, res),
-      "ms",
-      tokens["content-post"](req, res),
-    ].join(" ");
-  })
-);
 
-let persons = [
-  {
-    name: "Arto Hellas",
-    number: "040-123456",
-    id: 1,
-  },
-  {
-    name: "Ada Lovelace",
-    number: "39-44-5323523",
-    id: 2,
-  },
-  {
-    name: "Dan Abramov",
-    number: "12-43-234345",
-    id: 3,
-  },
-  {
-    name: "Mary Poppendieck",
-    number: "39-23-6423122",
-    id: 4,
-  },
-];
-
-app.get("/", (req, res) => {
-  res.send("<h1>Nothing to see here!</h1>");
-});
-
-// part 3.1
-app.get("/api/persons", (req, res) => {
-  res.json(persons);
-});
-
-// part 3.2
-app.get("/info", (req, res) => {
-  const now = new Date();
-  res.send(
-    `<p>Phonebook has info for ${
-      persons.length
-    } people.</p><p>${now.toString()}</p>`
-  );
-});
-
-// part 3.3
-app.get("/api/persons/:id", (request, response) => {
-  const id = Number(request.params.id);
-  const person = persons.find((person) => person.id === id);
-  if (person) {
-    response.json(person);
-  } else {
-    response.status(404).end();
+// ERROR HANDLING
+const errorHandler = (error, req, res, next) => {
+  console.error("ERROR =>", error.message);
+  if (error.name === "CastError") {
+    return res.status(400).send({ error: "malformatted id" });
+  } else if (error.name === "ValidationError") {
+    return res.status(400).json({ error: "cannot validate: " + error.message });
   }
-});
-
-// part 3.4
-app.delete("/api/persons/:id", (request, response) => {
-  const id = Number(request.params.id);
-  // reset updated data here, would be a setter in react
-  persons = persons.filter((person) => person.id !== id);
-  response.status(204).end();
-});
-
-// part 3.5
-const generateId = () => {
-  return Math.floor(Math.random() * Math.floor(1000001));
+  next(error);
 };
+app.use(errorHandler);
 
-app.post("/api/persons", (request, response) => {
-  const body = request.body;
-  const nameExists = persons
-    .map((p) => p.name.toLowerCase())
-    .includes(body.name.toLowerCase());
+// CREATE
+app.post("/api/persons", (req, res, next) => {
+  const body = req.body;
+  let nameExists;
+
+  Person.find({}).then((persons) => {
+    nameExists = persons
+      .map((p) => p.name.toLowerCase())
+      .includes(body.name.toLowerCase());
+  });
 
   if (!body.name || !body.number) {
-    return response.status(400).json({
+    return res.status(400).json({
       error: "content missing",
     });
   }
 
-  // part 3.6
   if (nameExists) {
-    return response.status(400).json({
+    return res.status(400).json({
       error: "name must be unique",
     });
   }
 
+  const person = new Person({
+    name: body.name,
+    number: body.number,
+  });
+
+  person
+    .save()
+    .then((savedPerson) => res.json(savedPerson.toJSON()))
+    .catch((err) => next(err));
+});
+
+// RETRIEVE
+app.get("/api/persons", (req, res) => {
+  Person.find({}).then((persons) => {
+    res.json(persons);
+  });
+});
+
+app.get("/info", (req, res) => {
+  const now = new Date();
+  Person.find({}).then((persons) =>
+    res.send(
+      `<p>Phonebook has info for ${
+        persons.length
+      } people.</p><p>${now.toString()}</p>`
+    )
+  );
+});
+
+app.get("/api/persons/:id", (req, res, next) => {
+  Person.findById(req.params.id)
+    .then((person) => {
+      if (person) {
+        res.json(person);
+      } else {
+        console.log("\nPerson does not exist");
+        res.status(404).end();
+      }
+    })
+    .catch((error) => next(error));
+});
+
+// UPDATE
+app.put("/api/persons/:id", (req, res, next) => {
+  const body = req.body;
   const person = {
     name: body.name,
     number: body.number,
-    id: generateId(),
   };
-  // reset persons obj
-  persons = persons.concat(person);
-  response.json(person);
+
+  Person.findByIdAndUpdate(req.params.id, person, { new: true })
+    .then((newPerson) => res.json(newPerson))
+    .catch((error) => next(error));
 });
+
+// DELETE
+app.delete("/api/persons/:id", (req, res, next) => {
+  Person.findByIdAndRemove(req.params.id)
+    .then((result) => res.status(204).end())
+    .catch((err) => next(err));
+});
+
+// // this causes issues, keeping it commented it out
+// const unknownEndpoint = (request, response) => {
+//   response.status(404).send({ error: "unknown endpoint" });
+// };
+// app.use(unknownEndpoint);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
